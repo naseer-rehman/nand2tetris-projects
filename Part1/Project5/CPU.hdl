@@ -1,0 +1,90 @@
+// This file is part of www.nand2tetris.org
+// and the book "The Elements of Computing Systems"
+// by Nisan and Schocken, MIT Press.
+// File name: projects/5/CPU.hdl
+/**
+ * The Hack Central Processing unit (CPU).
+ * Parses the binary code in the instruction input and executes it according to the
+ * Hack machine language specification. In the case of a C-instruction, computes the
+ * function specified by the instruction. If the instruction specifies to read a memory
+ * value, the inM input is expected to contain this value. If the instruction specifies
+ * to write a value to the memory, sets the outM output to this value, sets the addressM
+ * output to the target address, and asserts the writeM output (when writeM = 0, any
+ * value may appear in outM).
+ * If the reset input is 0, computes the address of the next instruction and sets the
+ * pc output to that value. If the reset input is 1, sets pc to 0.
+ * Note: The outM and writeM outputs are combinational: they are affected by the
+ * instruction's execution during the current cycle. The addressM and pc outputs are
+ * clocked: although they are affected by the instruction's execution, they commit to
+ * their new values only in the next cycle.
+ */
+
+CHIP CPU {
+
+    IN  inM[16],         // M value input  (M = contents of RAM[A])
+        instruction[16], // Instruction for execution. (ixxaccccccdddjjj)
+        reset;           // Signals whether to re-start the current
+                         // program (reset==1) or continue executing
+                         // the current program (reset==0).
+
+    OUT outM[16],        // M value output
+        writeM,          // Write to M? 
+        addressM[15],    // Address in data memory (of M)
+        pc[15];          // address of next instruction
+
+    PARTS:
+    // the last bit identifices A or C instruction
+    Mux16(a=instruction , b=aluOut, sel=instruction[15], out=registerAIn);
+    // instruction[12] = a, whether to use A or M for second operand
+    Mux16(a=outputA, b=inM, sel=instruction[12], out=secondOperandALU);
+
+    // A register
+    Not(in=instruction[15], out=isAInstruction);
+    // last d-bit == 1 means store result in A register
+    Or(a=isAInstruction, b=instruction[5], out=loadARegister);
+    ARegister(in=registerAIn, load=loadARegister, out=outputA);
+
+    // Why doesn't this language support multiple outputs? :_(
+    Or16(a=outputA, b=false, out[0..14]=addressM);
+
+    // D register
+    // Load D if C instruction and second d-bit == 1
+    And(a=instruction[15], b=instruction[4], out=shouldLoadD);
+    DRegister(in=aluOut, load=shouldLoadD, out=outputD);
+
+    // Write to M if first d-bit == 1 and a C instruction
+    And(a=instruction[3], b=instruction[15], out=writeM);
+
+    ALU(
+        x=outputD, y=secondOperandALU, zx=instruction[11], 
+        nx=instruction[10], zy=instruction[9], ny=instruction[8], 
+        f=instruction[7], no=instruction[6], out=aluOut, zr=zr, ng=ng 
+    );
+
+    // write to outM
+    Or16(a=aluOut , b=false , out=outM );
+
+    // PC register
+    Not(in=ng, out=notng);
+    Not(in=zr, out=notzr);
+    And(a=notng, b=notzr, out=jgtcond);
+    Not(in=jgtcond, out=jlecond);
+
+    And(a=instruction[0], b=jgtcond , out=j00);
+    Mux(a=zr, b=notng , sel=instruction[0] , out=j01);
+    Mux(a=ng, b=notzr , sel=instruction[0] , out=j02);
+    Mux(a=jlecond, b=true , sel=instruction[0], out=j03);
+
+    Mux(a=j00 , b=j01, sel=instruction[1], out=j10);
+    Mux(a=j02 , b=j03, sel=instruction[1], out=j11);
+
+    Mux(a=j10, b=j11, sel=instruction[2], out=jumpCondMet);
+    // If C instruction and jump condititio met, then jump
+    And(a=instruction[15], b=jumpCondMet, out=shouldJump);
+    Not(in=shouldJump, out=shouldInc);
+    
+    PC(
+        in=outputA, load=shouldJump, inc=shouldInc, 
+        reset=reset, out[0..14]=pc
+    );
+}
